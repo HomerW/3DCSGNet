@@ -1,3 +1,4 @@
 trained_models
 data
 *.out
+*.pyc
