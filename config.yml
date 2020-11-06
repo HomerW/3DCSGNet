@@ -4,13 +4,13 @@ comment = "Write a meaningful comment about the experiment."
 model_path = exp_prop_{}_top_{}_hdsz_{}_batch_{}_optim_{}_lr_{}_wd_{}_drop_{}_step_{}_mode_{}
 
 # proportion of the dataset to train or test on
-proportion = 100
+proportion = 1
 
 # whether to load pretrained mode
 preload_model = False
 
 # pretrained model path
-pretrain_model_path = "trained_models/"
+pretrain_model_path = "trained_models/models.pth"
 
 # number of epochs to train
 num_epochs = 100

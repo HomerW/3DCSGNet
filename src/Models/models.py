@@ -111,11 +111,7 @@ class CsgNet(nn.Module):
                                     out_features=self.hd_sz)
         self.batchnorm_fc_1 = nn.BatchNorm1d(self.hd_sz, affine=False)
 
-        self.pytorch_version = torch.__version__[2]
-        if self.pytorch_version == "3":
-            self.logsoftmax = nn.LogSoftmax(1)
-        else:
-            self.logsoftmax = nn.LogSoftmax()
+        self.logsoftmax = nn.LogSoftmax(1)
         self.drop = nn.Dropout(dropout)
         self.relu = nn.ReLU()
         self.softmax = nn.Softmax()
@@ -123,7 +119,7 @@ class CsgNet(nn.Module):
 
     def encoder(self, x):
         """
-        Only defines the forward pass of the encoder that takes the input 
+        Only defines the forward pass of the encoder that takes the input
         voxel Tensor and gives a fixed dim feature vector.
         :param x: Input tensor containing the raw voxels
         :return: fixed dim feature vector
@@ -136,9 +132,9 @@ class CsgNet(nn.Module):
     def forward(self, x):
         """
         Defines the forward pass for the network
-        :param x: This will contain data based on the type of training that 
+        :param x: This will contain data based on the type of training that
         you do.
-        :return: outputs of the network, depending upon the architecture 
+        :return: outputs of the network, depending upon the architecture
         """
         if self.mode == 1:
             """Teacher forcing network"""
@@ -174,6 +170,7 @@ class CsgNet(nn.Module):
             h = Variable(torch.zeros(1, batch_size, self.hd_sz)).cuda()
             x_f = self.encoder(data[-1, :, 0:1, :, :, :])
             last_op = input_op[:, 0, :]
+
             outputs = []
             for timestep in range(0, program_len):
                 # X_f is always input to the network at every time step
@@ -192,13 +189,39 @@ class CsgNet(nn.Module):
                 last_op = arr
             return outputs
 
+    def test2(self, data, program_len):
+        batch_size = data.size()[0]
+        h = Variable(torch.zeros(1, batch_size, self.hd_sz)).cuda()
+        data = data.permute(0, 4, 1, 2, 3)
+        x_f = self.encoder(data)
+        last_op = np.zeros((batch_size, self.num_draws+1))
+        last_op[:, self.num_draws] = 1
+        last_op = torch.from_numpy(last_op)
+        outputs = []
+        for timestep in range(0, program_len):
+            # X_f is always input to the network at every time step
+            # along with previous predicted label
+            input_op_rnn = self.relu(self.dense_input_op(last_op))
+            input_op_rnn = input_op_rnn.unsqueeze(0)
+            input = torch.cat((self.drop(x_f), input_op_rnn), 2)
+            h, _ = self.rnn(input, h)
+            hd = self.relu(self.dense_fc_1(self.drop(h[0])))
+            output = self.logsoftmax(self.dense_output(self.drop(hd)))
+            outputs.append(output)
+            next_input_op = torch.max(output, 1)[1]
+            arr = Variable(torch.zeros(batch_size, self.num_draws + 1).scatter_(1,
+                                                                                next_input_op.data.cpu().view(batch_size, 1),
+                                                                                1.0)).cuda()
+            last_op = arr
+        return outputs
+
     def beam_search_mode_1(self, data, w, max_time):
         """
         Implements beam search for different models.
         :param x: Input data
         :param w: beam width
         :param max_time: Maximum length till the program has to be generated
-        :return all_beams: all beams to find out the indices of all the 
+        :return all_beams: all beams to find out the indices of all the
         """
         data, input_op = data
 
@@ -206,7 +229,6 @@ class CsgNet(nn.Module):
         # containing index of the selected output and the corresponding
         # probability.
         data = data.permute(1, 0, 2, 3, 4, 5)
-        pytorch_version = torch.__version__[2]
         batch_size = data.size()[1]
         h = Variable(torch.zeros(1, batch_size, self.hd_sz)).cuda()
         # Last beams' data
@@ -234,10 +256,7 @@ class CsgNet(nn.Module):
                 dense_output = self.dense_output(self.drop(hd))
                 output = self.logsoftmax(dense_output)
                 # Element wise multiply by previous probabs
-                if pytorch_version == "3":
-                    output = torch.nn.Softmax(1)(output)
-                elif pytorch_version == "1":
-                    output = torch.nn.Softmax()(output)
+                output = torch.nn.Softmax(1)(output)
                 output = output * prev_output_prob[b]
                 outputs.append(output)
                 next_B[b] = {}
@@ -313,20 +332,19 @@ class ParseModelOutput:
     def get_final_canvas(self, outputs, if_just_expressions=False,
                          if_pred_images=False):
         """
-        Takes the raw output from the network and returns the predicted 
-        canvas. The steps involve parsing the outputs into expressions, 
-        decoding expressions, and finally producing the canvas using 
+        Takes the raw output from the network and returns the predicted
+        canvas. The steps involve parsing the outputs into expressions,
+        decoding expressions, and finally producing the canvas using
         intermediate stacks.
-        :type if_pred_images: bool, either use it with fixed len programs or keep it 
+        :type if_pred_images: bool, either use it with fixed len programs or keep it
         True, because False doesn't work with variable length programs
-        :param if_just_expressions: If only expression is required than we 
+        :param if_just_expressions: If only expression is required than we
         just return the function after calculating expressions
-        :param outputs: List, each element correspond to the output from the 
+        :param outputs: List, each element correspond to the output from the
         network
         :return: stack: Predicted final stack for correct programs
         :return: correct_programs: Indices of correct programs
         """
-        pytorch_version = torch.__version__[2]
         batch_size = outputs[0].size()[0]
         steps = self.steps
         # Initialize empty expression string, len equal to batch_size
@@ -336,10 +354,7 @@ class ParseModelOutput:
 
         for j in range(batch_size):
             for i in range(steps):
-                if pytorch_version == "3":
-                    expressions[j] += self.unique_draws[labels[i][j]]
-                elif pytorch_version == "1":
-                    expressions[j] += self.unique_draws[labels[i][j, 0]]
+                expressions[j] += self.unique_draws[labels[i][j]]
         # Remove the stop symbol and later part of the expression
         for index, exp in enumerate(expressions):
             expressions[index] = exp.split("$")[0]
@@ -380,7 +395,7 @@ class ParseModelOutput:
         return stacks, correct_programs, expressions
 
     def expression2stack(self, expressions):
-        """Assuming all the expression are correct and coming from 
+        """Assuming all the expression are correct and coming from
         groundtruth labels. Helpful in visualization of programs
         :param expressions: List, each element an expression of program
         """
@@ -418,10 +433,10 @@ class PushDownInduceProgram:
     def __init__(self, stack_size, canvas_shape, unique_draws, max_time=3,
                  batch_size=256, primitves=None):
         """
-        Parses the output from the network one time step at a time and also 
+        Parses the output from the network one time step at a time and also
         simulate the stack that becomes input to the network at the next time
-        step. It uses the pushdown stack created for Stack-CNN. 
-        This class is used in testing a stack based model or in training and 
+        step. It uses the pushdown stack created for Stack-CNN.
+        This class is used in testing a stack based model or in training and
         testing of RL model
         :param stack_size: Max size of the stack
         :param canvas_shape: Shape of the canvas drawing
@@ -455,12 +470,12 @@ class PushDownInduceProgram:
 
     def induce_program(self, output, timestep):
         """
-        Induces the program by taking current output from the network, 
-        returns the simulated stack. Also takes care of the validity of 
-        the programs. Currently, as soon as the program is recognized to be 
+        Induces the program by taking current output from the network,
+        returns the simulated stack. Also takes care of the validity of
+        the programs. Currently, as soon as the program is recognized to be
         wrong, it just drops it.
         For invalid programs we produce empty canvas.
-        For programs that stop and are valid, the state of the canvas at the 
+        For programs that stop and are valid, the state of the canvas at the
         stopped timestep is repeated.
         If we encounter any wrong instruction, we lose hope and forget it.
         :param output: Output from the network at some point of time
@@ -549,10 +564,10 @@ def validity(program, max_time, timestep):
     Checks the validity of the program.
     :param program: List of dictionary containing program type and elements
     :param max_time: Max allowed length of program
-    :param timestep: Current timestep of the program, or in a sense length of 
+    :param timestep: Current timestep of the program, or in a sense length of
     program
-    # at evey index 
-    :return: 
+    # at evey index
+    :return:
     """
     num_draws = 0
     num_ops = 0

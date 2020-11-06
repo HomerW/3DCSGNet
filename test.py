@@ -36,7 +36,6 @@ generator = Generator(data_labels_paths=data_labels_paths,
                       time_steps=max(data_labels_paths.keys()),
                       stack_size=max(data_labels_paths.keys()) // 2 + 1)
 
-
 imitate_net = CsgNet(grid_shape=[64, 64, 64], dropout=config.dropout,
                      mode=config.mode, timesteps=max_len,
                      num_draws=len(generator.unique_draw),
@@ -89,31 +88,34 @@ total_iou = 0
 for k in data_labels_paths.keys():
     Rs = 0.0
     for batch_idx in range(dataset_sizes[k][1] // config.batch_size):
-        data_, labels = next(test_gen_objs[k])
-        data_ = data_[:, :, 0:config.top_k + 1, :, :, :]
-        one_hot_labels = prepare_input_op(labels, len(generator.unique_draw))
-        one_hot_labels = Variable(torch.from_numpy(one_hot_labels), volatile=True).cuda()
-        data = Variable(torch.from_numpy(data_)).cuda()
-        labels = Variable(torch.from_numpy(labels)).cuda()
+        with torch.no_grad():
+            print(f"batch {batch_idx}/{dataset_sizes[k][1] // config.batch_size}")
+            data_, labels = next(test_gen_objs[k])
+            data_ = data_[:, :, 0:config.top_k + 1, :, :, :]
+            one_hot_labels = prepare_input_op(labels, len(generator.unique_draw))
+            one_hot_labels = Variable(torch.from_numpy(one_hot_labels)).cuda()
+            data = Variable(torch.from_numpy(data_)).cuda()
+            labels = Variable(torch.from_numpy(labels)).cuda()
 
-        # This is for data parallelism purpose
-        data = data.permute(1, 0, 2, 3, 4, 5)
+            # This is for data parallelism purpose
+            data = data.permute(1, 0, 2, 3, 4, 5)
 
-        if cuda_devices > 1:
-            outputs = imitate_net.module.test([data, one_hot_labels, max_len])
-        else:
-            outputs = imitate_net.test([data, one_hot_labels, max_len])
+            if cuda_devices > 1:
+                outputs = imitate_net.module.test([data, one_hot_labels, max_len])
+            else:
+                outputs = imitate_net.test([data, one_hot_labels, max_len])
 
-        stack, _, expressions = parser.get_final_canvas(outputs, if_pred_images=True,
-                                                  if_just_expressions=False)
-        Predicted_expressions += expressions
-        target_expressions = parser.labels2exps(labels, k)
-        Target_expressions += target_expressions
-        # stacks = parser.expression2stack(expressions)
-        data_ = data_[-1, :, 0, :, :, :]
-        R = np.sum(np.logical_and(stack, data_), (1, 2, 3)) / (np.sum(
-            np.logical_or(stack, data_), (1, 2, 3)) + 1)
-        Rs += np.sum(R)
+            stack, _, expressions = parser.get_final_canvas(outputs, if_pred_images=True,
+                                                      if_just_expressions=False)
+            Predicted_expressions += expressions
+            target_expressions = parser.labels2exps(labels, k)
+            Target_expressions += target_expressions
+            # stacks = parser.expression2stack(expressions)
+            data_ = data_[-1, :, 0, :, :, :]
+            print(data_.shape)
+            R = np.sum(np.logical_and(stack, data_), (1, 2, 3)) / (np.sum(
+                np.logical_or(stack, data_), (1, 2, 3)) + 1)
+            Rs += np.sum(R)
     total_iou += Rs
     IOU[k] = Rs / ((dataset_sizes[k][1] // config.batch_size) * config.batch_size)
     print("IOU for {} len program: ".format(k), IOU[k])
