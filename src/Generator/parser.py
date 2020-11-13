@@ -12,7 +12,7 @@ class Parser:
     """
 
     def __init__(self):
-        self.shape_types = ["u", "p", "y"]
+        self.shape_types = ["c"]
         self.op = ["*", "+", "-"]
 
     def parse(self, expression: string):

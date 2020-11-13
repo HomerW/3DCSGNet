@@ -2,3 +2,5 @@ trained_models
 data
 *.out
 *.pyc
+log
+*_*.txt

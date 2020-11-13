@@ -135,8 +135,8 @@ class SimulateStack:
         states.
         :param if_primitives: if pre-rendered primitives are given.
         :param program: List with each item a program step
-        :param start_scratch: whether to start creating stack from scratch or 
-        stack already exist and we are appending new instructions. With this 
+        :param start_scratch: whether to start creating stack from scratch or
+        stack already exist and we are appending new instructions. With this
         set to False, stack can be started from its previous state.
         """
         # clear old garbage

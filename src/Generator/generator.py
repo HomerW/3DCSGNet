@@ -6,7 +6,10 @@ import deepdish as dd
 import numpy as np
 from matplotlib import pyplot as plt
 from .parser import Parser
-from .stack import SimulateStack
+from .stack_cuboids import SimulateStack
+from torch.nn import functional as F
+from itertools import product
+import torch
 
 
 class Generator:
@@ -49,22 +52,26 @@ class Generator:
         for k in self.programs.keys():
             all_programs += self.programs[k]
 
-        self.unique_draw = self.get_draw_set(all_programs)
-        self.unique_draw.sort()
-        # Append ops in the end and the last one is for stop symbol
-        self.unique_draw += ["+", "*", "-", "$"]
-        sim = SimulateStack(self.time_steps // 2 + 1, self.canvas_shape,
-                            self.unique_draw)
+        # self.unique_draw = self.get_draw_set(all_programs)
+        # self.unique_draw.sort()
+        # # Append ops in the end and the last one is for stop symbol
+        # self.unique_draw += ["+", "*", "-", "$"]
+
+        sim = SimulateStack(self.time_steps // 2 + 1, self.canvas_shape)
 
         if not (type(primitives) is dict):
             # # Draw all primitive in one go and reuse them later
             # sim.draw_all_primitives(self.unique_draw)
             # self.primitives = sim.draw_all_primitives(self.unique_draw)
             # dd.io.save("mix_len_all_primitives.h5", self.primitives)
-            self.primitives = dd.io.load('data/primitives.h5')
+            # self.primitives = dd.io.load('data/primitives.h5')
+            self.primitives = None
         else:
             self.primitives = primitives
         self.parser = Parser()
+
+        self.loc_dict = {(x, y, z): i for (i, (x, y, z)) in enumerate(list(product(list(range(8, 64, 8)), repeat=3)))}
+        self.dim_dict = {(x, y, z): i for (i, (x, y, z)) in enumerate(list(product(list(range(4, 36, 4)), repeat=3)))}
 
     def parse(self, expression):
         """
@@ -73,7 +80,7 @@ class Generator:
         :param expression: program expression in postfix notation
         :return program:
         """
-        self.shape_types = ["u", "p", "y"]
+        self.shape_types = ["c"]
         self.op = ["*", "+", "-"]
         program = []
         for index, value in enumerate(expression):
@@ -135,10 +142,13 @@ class Generator:
         """
         # The last label corresponds to the stop symbol and the first one to
         # start symbol.
-        labels = np.zeros((batch_size, program_len + 1), dtype=np.int64)
-        sim = SimulateStack(program_len // 2 + 1, self.canvas_shape,
-                            self.unique_draw)
-        sim.get_all_primitives(self.primitives)
+        labels_loc = np.zeros((batch_size, program_len + 1), dtype=np.int64)
+        labels_dims = np.zeros((batch_size, program_len + 1), dtype=np.int64)
+        labels_rot = np.zeros((batch_size, program_len + 1), dtype=np.int64)
+        labels_type = np.zeros((batch_size, program_len + 1), dtype=np.int64)
+        sim = SimulateStack(program_len // 2 + 1, self.canvas_shape)
+        if if_primitives:
+            sim.get_all_primitives(self.primitives)
         parser = Parser()
 
         if final_canvas:
@@ -186,12 +196,25 @@ class Generator:
                 for index, value in enumerate(image_ids):
                     # Get the current program
                     exp = self.programs[program_len][value]
-                    program = self.parse(exp)
+                    program = parser.parse(
+                        self.programs[program_len][value])
                     for j in range(program_len):
-                        labels[index, j] = self.unique_draw.index(
-                            program[j]["value"])
+                        if program[j]["type"] == "draw":
+                            labels_loc[index, j] = self.loc_dict[tuple([int(x) for x in program[j]["param"][:3]])]
+                            labels_dims[index, j] = self.dim_dict[tuple([int(x) for x in program[j]["param"][3:6]])]
+                            labels_rot[index, j] = int(program[j]["param"][6])
+                            labels_type[index, j] = 0
+                        else:
+                            labels_type[index, j] = 1
 
-                    labels[:, -1] = len(self.unique_draw) - 1
+                    # stop token
+                    labels_type[:, -1] = 2
+                labels = (
+                    labels_loc,
+                    labels_dims,
+                    labels_rot,
+                    labels_type
+                )
 
                 if if_jitter:
                     temp = stacks[-1, :, 0, :, :, :]
@@ -218,16 +241,19 @@ class Generator:
         :param batch_size: batch size of dataset to yielded
         :param program_len: length of program to be generated
         :param if_randomize: if randomize
-        :param final_canvas: if true return only the target canvas instead of 
+        :param final_canvas: if true return only the target canvas instead of
         complete stack to save memory
-        :return: 
+        :return:
         """
         # This generates test data of fixed length. Samples are not shuffled
         # by default.
-        labels = np.zeros((batch_size, program_len + 1), dtype=np.int64)
-        sim = SimulateStack(program_len // 2 + 1, self.canvas_shape,
-                            self.unique_draw)
-        sim.get_all_primitives(self.primitives)
+        labels_loc = np.zeros((batch_size, program_len + 1), dtype=np.int64)
+        labels_dims = np.zeros((batch_size, program_len + 1), dtype=np.int64)
+        labels_rot = np.zeros((batch_size, program_len + 1), dtype=np.int64)
+        labels_type = np.zeros((batch_size, program_len + 1), dtype=np.int64)
+        sim = SimulateStack(program_len // 2 + 1, self.canvas_shape)
+        if if_primitives:
+            sim.get_all_primitives(self.primitives)
         parser = Parser()
 
         if final_canvas:
@@ -259,7 +285,7 @@ class Generator:
                         if not if_primitives:
                             program = parser.parse(
                                 self.programs[program_len][value])
-                        if True:
+                        else:
                             # if all primitives are give already, parse using
                             #  different parser to get the keys to dict
                             try:
@@ -280,15 +306,25 @@ class Generator:
                 for index, value in enumerate(image_ids):
                     # Get the current program
                     exp = self.programs[program_len][value]
-                    program = self.parse(exp)
+                    program = parser.parse(
+                        self.programs[program_len][value])
                     for j in range(program_len):
-                        try:
-                            labels[index, j] = self.unique_draw.index(
-                                program[j]["value"])
-                        except:
-                            print(program)
+                        if program[j]["type"] == "draw":
+                            labels_loc[index, j] = self.loc_dict[tuple([int(x) for x in program[j]["param"][:3]])]
+                            labels_dims[index, j] = self.dim_dict[tuple([int(x) for x in program[j]["param"][3:6]])]
+                            labels_rot[index, j] = int(program[j]["param"][6])
+                            labels_type[index, j] = 0
+                        else:
+                            labels_type[index, j] = 1
 
-                    labels[:, -1] = len(self.unique_draw) - 1
+                    # stop token
+                    labels_type[:, -1] = 2
+                labels = (
+                    labels_loc,
+                    labels_dims,
+                    labels_rot,
+                    labels_type
+                )
 
                 if if_jitter:
                     temp = stacks[-1, :, 0, :, :, :]

@@ -16,7 +16,7 @@ pretrain_model_path = "trained_models/models.pth"
 num_epochs = 100
 
 # batch size for training
-batch_size = 66
+batch_size = 6
 
 # hidden size for RNN
 hidden_size = 1500

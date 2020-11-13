@@ -7,8 +7,12 @@ import torch
 import torch.nn as nn
 from torch.autograd.variable import Variable
 from ..Generator.parser import Parser
-from ..Generator.stack import SimulateStack
+from ..Generator.stack_cuboids import SimulateStack
+from ..Generator.stack_cuboids import SimulateStackGenData
+import torch.nn.functional as F
+from itertools import product
 
+device = torch.device("cuda")
 
 class CsgNet(nn.Module):
     def __init__(self,
@@ -16,7 +20,6 @@ class CsgNet(nn.Module):
                  dropout=0.5,
                  mode=1,
                  timesteps=3,
-                 num_draws=400,
                  in_sz=2048,
                  hd_sz=2048,
                  stack_len=1):
@@ -36,7 +39,6 @@ class CsgNet(nn.Module):
         self.input_channels = stack_len + 1
         self.in_sz = in_sz
         self.hd_sz = hd_sz
-        self.num_draws = num_draws
         self.mode = mode
         self.time_steps = timesteps
         self.grid_shape = grid_shape
@@ -97,15 +99,17 @@ class CsgNet(nn.Module):
         if (self.mode == 1) or (self.mode == 3):
             # Teacher forcing architecture, increased from previous value of 128
             self.input_op_sz = 128
-            self.dense_input_op = nn.Linear(in_features=self.num_draws + 1,
+            self.dense_input_op = nn.Linear(in_features=861,
                                             out_features=self.input_op_sz)
 
             self.rnn = nn.GRU(input_size=self.in_sz + self.input_op_sz,
                               hidden_size=self.hd_sz,
                               num_layers=self.rnn_layers,
                               batch_first=False)
-            self.dense_output = nn.Linear(in_features=self.hd_sz, out_features=(
-                self.num_draws))
+            self.dense_loc = nn.Linear(in_features=self.hd_sz, out_features=343)
+            self.dense_dims = nn.Linear(in_features=self.hd_sz, out_features=512)
+            self.dense_rot = nn.Linear(in_features=self.hd_sz, out_features=3)
+            self.dense_type = nn.Linear(in_features=self.hd_sz, out_features=3)
 
         self.dense_fc_1 = nn.Linear(in_features=self.hd_sz,
                                     out_features=self.hd_sz)
@@ -129,6 +133,20 @@ class CsgNet(nn.Module):
         x = x.view(1, batch_size, self.in_sz)
         return x
 
+    def loss_function(self, outputs, labels):
+        loss = nn.CrossEntropyLoss()
+        labels_loc, labels_dims, labels_rot, labels_type = labels
+        labels_loc = torch.from_numpy(labels_loc).cuda().long()
+        labels_dims = torch.from_numpy(labels_dims).cuda().long()
+        labels_rot = torch.from_numpy(labels_rot).cuda().long()
+        labels_type = torch.from_numpy(labels_type).cuda().long()
+        loc_loss = loss(outputs[:, :, :343].permute(1, 2, 0), labels_loc)
+        dim_loss = loss(outputs[:, :, 343:855].permute(1, 2, 0), labels_dims)
+        rot_loss = loss(outputs[:, :, 855:858].permute(1, 2, 0), labels_rot)
+        type_loss = loss(outputs[:, :, 858:].permute(1, 2, 0), labels_type)
+        return loc_loss + dim_loss + rot_loss + type_loss
+
+
     def forward(self, x):
         """
         Defines the forward pass for the network
@@ -143,6 +161,43 @@ class CsgNet(nn.Module):
             batch_size = data.size()[1]
             h = Variable(torch.zeros(1, batch_size, self.hd_sz)).cuda()
             x_f = self.encoder(data[-1, :, 0:1, :, :, :])
+            outputs = []
+            for timestep in range(0, program_len + 1):
+                # X_f is always input to the network at every time step
+                # along with previous predicted label
+                input_op_rnn = self.relu(self.dense_input_op(input_op[:,
+                                                             timestep, :]))
+                input_op_rnn = input_op_rnn.unsqueeze(0)
+                input = torch.cat((self.drop(x_f), input_op_rnn), 2)
+                h, _ = self.rnn(input, h)
+                hd = self.relu(self.dense_fc_1(self.drop(h[0])))
+                loc_output = self.dense_loc(self.drop(hd))
+                dims_output = self.dense_dims(self.drop(hd))
+                rot_output = self.dense_rot(self.drop(hd))
+                type_output = self.dense_type(self.drop(hd))
+                output = torch.cat((
+                    loc_output,
+                    dims_output,
+                    rot_output,
+                    type_output
+                ), dim=1)
+                outputs.append(output)
+            return torch.stack(outputs)
+
+    def forward2(self, x):
+        """
+        Defines the forward pass for the network
+        :param x: This will contain data based on the type of training that
+        you do.
+        :return: outputs of the network, depending upon the architecture
+        """
+        if self.mode == 1:
+            """Teacher forcing network"""
+            data, input_op, program_len = x
+            data = data.permute(0, 4, 1, 2, 3)
+            batch_size = data.size()[0]
+            h = Variable(torch.zeros(1, batch_size, self.hd_sz)).cuda()
+            x_f = self.encoder(data)
             outputs = []
             for timestep in range(0, program_len + 1):
                 # X_f is always input to the network at every time step
@@ -180,14 +235,29 @@ class CsgNet(nn.Module):
                 input = torch.cat((self.drop(x_f), input_op_rnn), 2)
                 h, _ = self.rnn(input, h)
                 hd = self.relu(self.dense_fc_1(self.drop(h[0])))
-                output = self.logsoftmax(self.dense_output(self.drop(hd)))
+                loc_output = self.dense_loc(self.drop(hd))
+                dims_output = self.dense_dims(self.drop(hd))
+                rot_output = self.dense_rot(self.drop(hd))
+                type_output = self.dense_type(self.drop(hd))
+                output = torch.cat((
+                    loc_output,
+                    dims_output,
+                    rot_output,
+                    type_output
+                ), dim=1)
                 outputs.append(output)
-                next_input_op = torch.max(output, 1)[1]
-                arr = Variable(torch.zeros(batch_size, self.num_draws + 1).scatter_(1,
-                                                                                    next_input_op.data.cpu().view(batch_size, 1),
-                                                                                    1.0)).cuda()
-                last_op = arr
-            return outputs
+
+                next_input_loc = torch.max(loc_output, 1)[1]
+                next_input_dims = torch.max(dims_output, 1)[1]
+                next_input_rot = torch.max(rot_output, 1)[1]
+                next_input_type = torch.max(type_output, 1)[1]
+                last_op = torch.cat((
+                    F.one_hot(next_input_loc, 343),
+                    F.one_hot(next_input_dims, 512),
+                    F.one_hot(next_input_rot, 3),
+                    F.one_hot(next_input_type, 3)
+                ), dim=1).float()
+            return torch.stack(outputs)
 
     def test2(self, data, program_len):
         batch_size = data.size()[0]
@@ -196,7 +266,7 @@ class CsgNet(nn.Module):
         x_f = self.encoder(data)
         last_op = np.zeros((batch_size, self.num_draws+1))
         last_op[:, self.num_draws] = 1
-        last_op = torch.from_numpy(last_op)
+        last_op = torch.from_numpy(last_op).to(device).float()
         outputs = []
         for timestep in range(0, program_len):
             # X_f is always input to the network at every time step
@@ -310,7 +380,7 @@ class ParseModelOutput:
     fashion. This class can be used to generate final canvas and
     expressions.
     """
-    def __init__(self, unique_draws, stack_size, steps, canvas_shape, primitives=None):
+    def __init__(self, stack_size, steps, canvas_shape, primitives=None):
         """
         :param unique_draws: Unique draw/op operations in the current dataset
         :param stack_size: Stack size
@@ -323,11 +393,147 @@ class ParseModelOutput:
         self.steps = steps
         self.Parser = Parser()
         if primitives == None:
-            self.sim = SimulateStack(self.stack_size, self.canvas_shape, unique_draws)
+            self.sim = SimulateStack(self.stack_size, self.canvas_shape)
+            self.if_primitives = False
         else:
-            self.sim = SimulateStack(self.stack_size, self.canvas_shape, unique_draws)
+            self.sim = SimulateStack(self.stack_size, self.canvas_shape)
             self.sim.get_all_primitives(primitives)
-        self.unique_draws = unique_draws
+
+        self.loc_dict = {i: (x, y, z) for (i, (x, y, z)) in enumerate(list(product(list(range(8, 64, 8)), repeat=3)))}
+        self.dim_dict = {i: (x, y, z) for (i, (x, y, z)) in enumerate(list(product(list(range(4, 36, 4)), repeat=3)))}
+
+    def decode(self, locs, dims, rot, type):
+        program = []
+        for j in range(type.shape[0]):
+            if type[j] == 0:
+                program.append({})
+                program[-1]["type"] = "draw"
+                program[-1]["param"] = self.loc_dict[locs[j]] + self.dims_dict[dims[j]] + tuple([rot[j]])
+            elif type[j] == 1:
+                program.append({})
+                program[-1]["type"] = "op"
+            elif type[j] == 2:
+                break
+        return program
+
+    def get_final_canvas(self, outputs, if_just_expressions=False,
+                         if_pred_images=False):
+        """
+        Takes the raw output from the network and returns the predicted
+        canvas. The steps involve parsing the outputs into expressions,
+        decoding expressions, and finally producing the canvas using
+        intermediate stacks.
+        :type if_pred_images: bool, either use it with fixed len programs or keep it
+        True, because False doesn't work with variable length programs
+        :param if_just_expressions: If only expression is required than we
+        just return the function after calculating expressions
+        :param outputs: List, each element correspond to the output from the
+        network
+        :return: stack: Predicted final stack for correct programs
+        :return: correct_programs: Indices of correct programs
+        """
+        locs = torch.max(outputs[:, :, :343], dim=2)[1]
+        dims = torch.max(outputs[:, :, 343:855], dim=2)[1]
+        rot = torch.max(outputs[:, :, 855:858], dim=2)[1]
+        type = torch.max(outputs[:, :, 858:], dim=2)[1]
+
+        batch_size = outputs.shape[1]
+        programs = []
+        expressions = []
+        for index in range(batch_size):
+            programs.append(self.decode(locs[index], dims[index], rot[index], type[index]))
+
+        stacks = []
+        correct_programs = []
+        for program in programs:
+            if validity(program, len(program), len(program) - 1):
+                correct_programs.append(index)
+            else:
+                if if_pred_images:
+                    # if you just want final predicted image
+                    stack = np.zeros((self.canvas_shape[0],
+                                      self.canvas_shape[1],
+                                      self.canvas_shape[2]))
+                else:
+                    stack = np.zeros((self.steps + 1, self.stack_size,
+                                      self.canvas_shape[0],
+                                      self.canvas_shape[1],
+                                      self.canvas_shape[2]))
+                stacks.append(stack)
+                continue
+                # Check the validity of the expressions
+
+            self.sim.generate_stack(program, if_primitives=self.if_primitives)
+            stack = self.sim.stack_t
+            stack = np.stack(stack, axis=0)
+            if if_pred_images:
+                stacks.append(stack[-1, 0, :, :, :])
+            else:
+                stacks.append(stack)
+        if if_pred_images:
+            stacks = np.stack(stacks, 0).astype(dtype=np.bool)
+        else:
+            stacks = np.stack(stacks, 1).astype(dtype=np.bool)
+        return stacks, correct_programs, expressions
+
+    def expression2stack(self, expressions):
+        """Assuming all the expression are correct and coming from
+        groundtruth labels. Helpful in visualization of programs
+        :param expressions: List, each element an expression of program
+        """
+        stacks = []
+        for index, exp in enumerate(expressions):
+            program = self.sim.parse(exp)
+            self.sim.generate_stack(program, if_primitives=True)
+            stack = self.sim.stack_t
+            stack = np.stack(stack, axis=0)
+            stacks.append(stack)
+        stacks = np.stack(stacks, 1).astype(dtype=np.float32)
+        return stacks
+
+    def labels2exps(self, labels, steps):
+        """
+        Assuming grountruth labels, we want to find expressions for them
+        :param labels: Grounth labels batch_size x time_steps
+        :return: expressions: Expressions corresponding to labels
+        """
+        if isinstance(labels, np.ndarray):
+            batch_size = labels.shape[0]
+        else:
+            batch_size = labels.size()[0]
+            labels = labels.data.cpu().numpy()
+        # Initialize empty expression string, len equal to batch_size
+        correct_programs = []
+        expressions = [""] * batch_size
+        for j in range(batch_size):
+            for i in range(steps):
+                expressions[j] += self.unique_draws[labels[j, i]]
+        return expressions
+
+
+class ParseModelOutputGenData:
+    """
+    This class parse complete output from the network which are in joint
+    fashion. This class can be used to generate final canvas and
+    expressions.
+    """
+    def __init__(self, stack_size, steps, canvas_shape, primitives=None):
+        """
+        :param unique_draws: Unique draw/op operations in the current dataset
+        :param stack_size: Stack size
+        :param steps: Number of steps in the program
+        :param canvas_shape: Shape of the canvases
+        :param primitives: dictionary containing 3D voxel representation of primitives
+        """
+        self.canvas_shape = canvas_shape
+        self.stack_size = stack_size
+        self.steps = steps
+        self.Parser = Parser()
+        if primitives == None:
+            self.sim = SimulateStackGenData(self.stack_size, self.canvas_shape)
+        else:
+            self.sim = SimulateStackGenData(self.stack_size, self.canvas_shape)
+            self.sim.get_all_primitives(primitives)
 
     def get_final_canvas(self, outputs, if_just_expressions=False,
                          if_pred_images=False):
@@ -381,7 +587,7 @@ class ParseModelOutput:
                 continue
                 # Check the validity of the expressions
 
-            self.sim.generate_stack(program, if_primitives=True)
+            self.sim.generate_stack(program)
             stack = self.sim.stack_t
             stack = np.stack(stack, axis=0)
             if if_pred_images:
