@@ -99,7 +99,7 @@ class CsgNet(nn.Module):
         if (self.mode == 1) or (self.mode == 3):
             # Teacher forcing architecture, increased from previous value of 128
             self.input_op_sz = 128
-            self.dense_input_op = nn.Linear(in_features=861,
+            self.dense_input_op = nn.Linear(in_features=863,
                                             out_features=self.input_op_sz)
 
             self.rnn = nn.GRU(input_size=self.in_sz + self.input_op_sz,
@@ -109,7 +109,7 @@ class CsgNet(nn.Module):
             self.dense_loc = nn.Linear(in_features=self.hd_sz, out_features=343)
             self.dense_dims = nn.Linear(in_features=self.hd_sz, out_features=512)
             self.dense_rot = nn.Linear(in_features=self.hd_sz, out_features=3)
-            self.dense_type = nn.Linear(in_features=self.hd_sz, out_features=3)
+            self.dense_type = nn.Linear(in_features=self.hd_sz, out_features=5)
 
         self.dense_fc_1 = nn.Linear(in_features=self.hd_sz,
                                     out_features=self.hd_sz)
@@ -157,10 +157,12 @@ class CsgNet(nn.Module):
         if self.mode == 1:
             """Teacher forcing network"""
             data, input_op, program_len = x
-            data = data.permute(1, 0, 2, 3, 4, 5)
-            batch_size = data.size()[1]
+            # data = data.permute(1, 0, 2, 3, 4, 5)
+            # batch_size = data.size()[1]
+            batch_size = data.size()[0]
             h = Variable(torch.zeros(1, batch_size, self.hd_sz)).cuda()
-            x_f = self.encoder(data[-1, :, 0:1, :, :, :])
+            # x_f = self.encoder(data[-1, :, 0:1, :, :, :])
+            x_f = self.encoder(data.unsqueeze(1))
             outputs = []
             for timestep in range(0, program_len + 1):
                 # X_f is always input to the network at every time step
@@ -220,10 +222,12 @@ class CsgNet(nn.Module):
 
             # This permute is used for multi gpu training, where first dimension is
             # considered as batch dimension.
-            data = data.permute(1, 0, 2, 3, 4, 5)
-            batch_size = data.size()[1]
+            # data = data.permute(1, 0, 2, 3, 4, 5)
+            # batch_size = data.size()[1]
+            batch_size = data.size()[0]
             h = Variable(torch.zeros(1, batch_size, self.hd_sz)).cuda()
-            x_f = self.encoder(data[-1, :, 0:1, :, :, :])
+            # x_f = self.encoder(data[-1, :, 0:1, :, :, :])
+            x_f = self.encoder(data.unsqueeze(1))
             last_op = input_op[:, 0, :]
 
             outputs = []
@@ -255,7 +259,7 @@ class CsgNet(nn.Module):
                     F.one_hot(next_input_loc, 343),
                     F.one_hot(next_input_dims, 512),
                     F.one_hot(next_input_rot, 3),
-                    F.one_hot(next_input_type, 3)
+                    F.one_hot(next_input_type, 5)
                 ), dim=1).float()
             return torch.stack(outputs)
 
@@ -401,18 +405,20 @@ class ParseModelOutput:
 
         self.loc_dict = {i: (x, y, z) for (i, (x, y, z)) in enumerate(list(product(list(range(8, 64, 8)), repeat=3)))}
         self.dim_dict = {i: (x, y, z) for (i, (x, y, z)) in enumerate(list(product(list(range(4, 36, 4)), repeat=3)))}
+        self.op_dict = {1: "+", 2: "-", 3: "*"}
 
     def decode(self, locs, dims, rot, type):
         program = []
         for j in range(type.shape[0]):
-            if type[j] == 0:
+            if int(type[j]) == 0:
                 program.append({})
                 program[-1]["type"] = "draw"
-                program[-1]["param"] = self.loc_dict[locs[j]] + self.dims_dict[dims[j]] + tuple([rot[j]])
-            elif type[j] == 1:
+                program[-1]["param"] = self.loc_dict[int(locs[j])] + self.dim_dict[int(dims[j])] + tuple([int(rot[j])])
+            elif int(type[j]) < 4:
                 program.append({})
                 program[-1]["type"] = "op"
-            elif type[j] == 2:
+                program[-1]["value"] = self.op_dict[int(type[j])]
+            elif int(type[j]) == 4:
                 break
         return program
 
@@ -441,7 +447,7 @@ class ParseModelOutput:
         programs = []
         expressions = []
         for index in range(batch_size):
-            programs.append(self.decode(locs[index], dims[index], rot[index], type[index]))
+            programs.append(self.decode(locs[:, index], dims[:, index], rot[:, index], type[:, index]))
 
         stacks = []
         correct_programs = []

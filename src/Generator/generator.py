@@ -72,6 +72,7 @@ class Generator:
 
         self.loc_dict = {(x, y, z): i for (i, (x, y, z)) in enumerate(list(product(list(range(8, 64, 8)), repeat=3)))}
         self.dim_dict = {(x, y, z): i for (i, (x, y, z)) in enumerate(list(product(list(range(4, 36, 4)), repeat=3)))}
+        self.op_dict = {"+": 1, "-": 2, "*": 3}
 
     def parse(self, expression):
         """
@@ -186,9 +187,9 @@ class Generator:
                                                          value])
                         sim.generate_stack(program, if_primitives=if_primitives)
                         stack = sim.stack_t
-                        stack = np.stack(stack, axis=0)
+                        stack = np.stack(stack, axis=0)[-1, 0, :, :, :]
                         stacks.append(stack)
-                    stacks = np.stack(stacks, 1).astype(dtype=np.float32)
+                    stacks = np.stack(stacks).astype(dtype=np.float32)
                 else:
                     # When only target image is required
                     stacks = Stack[0:1, image_ids, 0:1, :, :, :].astype(
@@ -205,10 +206,10 @@ class Generator:
                             labels_rot[index, j] = int(program[j]["param"][6])
                             labels_type[index, j] = 0
                         else:
-                            labels_type[index, j] = 1
+                            labels_type[index, j] = self.op_dict[program[j]["value"]]
 
                     # stop token
-                    labels_type[:, -1] = 2
+                    labels_type[:, -1] = 4
                 labels = (
                     labels_loc,
                     labels_dims,
@@ -296,9 +297,9 @@ class Generator:
                                     value])
                         sim.generate_stack(program, if_primitives=if_primitives)
                         stack = sim.stack_t
-                        stack = np.stack(stack, axis=0)
+                        stack = np.stack(stack, axis=0)[-1, 0, :, :, :]
                         stacks.append(stack)
-                    stacks = np.stack(stacks, 1).astype(dtype=np.float32)
+                    stacks = np.stack(stacks).astype(dtype=np.float32)
                 else:
                     # When only target image is required
                     stacks = Stack[0:1, image_ids, 0:1, :, :, :].astype(

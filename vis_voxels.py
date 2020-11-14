@@ -8,9 +8,9 @@ def vis_voxels(voxels, name):
     ax = fig.gca(projection='3d')
     ax.voxels(np.rot90(np.rot90(voxels, 1, (0, 1)), 3, (0, 2)), edgecolor='k')
 
-    # plt.savefig(f"{name}.png")
-    # plt.close()
-    plt.show()
+    plt.savefig(f"{name}.png")
+    plt.close()
+    # plt.show()
 
 # Helper function: given angle + normal compute a rotation matrix that will accomplish the operation
 def getRotMatrix(angle, normal):

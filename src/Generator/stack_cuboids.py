@@ -173,7 +173,7 @@ class SimulateStack:
                 center = [int(x) for x in p["param"][:3]]
                 dims = [int(x) for x in p["param"][3:6]]
                 rot = int(p["param"][6])
-                layer = self.draw[p["value"]](center, dims, rot)
+                layer = self.draw["c"](center, dims, rot)
 
                 self.stack.push(layer)
 

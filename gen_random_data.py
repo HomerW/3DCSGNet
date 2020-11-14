@@ -9,7 +9,7 @@ from copy import deepcopy
 max_ops = 2
 max_len = (max_ops * 2) + 1
 parser = ParseModelOutputGenData(max_len // 2 + 1, max_len, [64, 64, 64])
-with open("draws_cuboids.txt", "r") as file:
+with open("d.txt", "r") as file:
     unique_draws = file.readlines()
 unique_draws = [x.strip() for x in unique_draws]
 other_parser = Parser()
@@ -20,7 +20,7 @@ def get_voxels(exp):
     # for i in range(1, len(program)):
     #     sub_prog = program[:i]
     #     try:
-    #         parser.sim.generate_stack(sub_prog, if_primitives=True)
+    #         parser.sim.generate_stack(sub_prog)
     #     except Exception as e:
     #         print(e)
     #         return None
@@ -47,18 +47,20 @@ def rand_program():
     q = [True, True, False]
     hier_ind = 1
     program = ""
+    inter_prog = ""
 
     clear_stack()
 
     while len(q) > 0:
         value = q.pop(0)
         if value:
-            if random.random() < 0.5 and hier_ind < max_ops:
+            # if (random.random() < 0.9 and hier_ind < max_ops) or ((not any(q)) and hier_ind < max_ops):
+            if (random.random() < 0.5 and hier_ind < max_ops):
                 q = [True, True, False] + q
                 hier_ind += 1
             else:
                 prim = unique_draws[random.choice(range(len(unique_draws)))]
-                program += prim
+                inter_prog += prim
         else:
             ops = ["+", "-", "*"]
             success = False
@@ -79,9 +81,10 @@ def rand_program():
                         p = [1]
                 op = np.random.choice(ops, p=p)
                 ops.remove(op)
-                if get_voxels(program + op) is not None:
+                if get_voxels(inter_prog + op) is not None:
                     success = True
-                    program += op
+                    program += inter_prog + op
+                    inter_prog = ""
                     break
                 parser.sim.stack_t = old_stack_t
                 parser.sim.stack = old_stack
@@ -117,14 +120,14 @@ while True:
     num_minus = prog.count("-")
     num_times = prog.count("*")
     total = num_plus + num_minus + num_times
-    with open(f"{total}_{max_ops}.txt", "a") as file:
+    with open(f"{total}.txt", "a") as file:
         file.write(f"{prog}\n")
     print(prog)
 
-# with open("1.txt", "r") as file:
+# with open("10_10.txt", "r") as file:
 #     expressions = file.readlines()
 # expressions = [x.strip() for x in expressions]
-# all_prog = "".join(expressions)
+# get_voxels(expressions[0])
 #
 # num_plus = all_prog.count("+")
 # num_minus = all_prog.count("-")
