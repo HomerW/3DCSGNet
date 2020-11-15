@@ -447,7 +447,8 @@ class ParseModelOutput:
         programs = []
         expressions = []
         for index in range(batch_size):
-            programs.append(self.decode(locs[:, index], dims[:, index], rot[:, index], type[:, index]))
+            p = self.decode(locs[:, index], dims[:, index], rot[:, index], type[:, index])
+            programs.append(p)
 
         stacks = []
         correct_programs = []

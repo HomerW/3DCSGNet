@@ -42,7 +42,7 @@ callback.add_element(["train_loss", "test_loss", "train_mse", "test_mse"])
 # data_labels_paths = {3: "data/one_op/expressions.txt",
 #                      5: "data/two_ops/expressions.txt",
 #                      7: "data/three_ops/expressions.txt"}
-data_labels_paths = {(k*2)+1: f"data/new_synthetic/{k}.txt" for k in range(1, 11)}
+data_labels_paths = {(k*2)+1: f"data/new_synthetic/{k}.txt" for k in range(5, 11)}
 
 proportion = config.proportion  # proportion is in percentage. vary from [1, 100].
 
@@ -51,7 +51,7 @@ proportion = config.proportion  # proportion is in percentage. vary from [1, 100
 #                  5: [proportion * 2000, proportion * 500],
 #                  7: [proportion * 4000, proportion * 100]}
 # dataset_sizes = {(k*2)+1: [max(20000, int((k / 2))*10000), 100] for k in range(1, 11)}
-dataset_sizes = {(k*2)+1: [3000, 120] for k in range(1, 11)}
+dataset_sizes = {(k*2)+1: [100, 100] for k in range(5, 11)}
 
 config.train_size = sum(dataset_sizes[k][0] for k in dataset_sizes.keys())
 config.test_size = sum(dataset_sizes[k][1] for k in dataset_sizes.keys())
@@ -140,15 +140,25 @@ def one_hot_labels(labels):
     oh_labels = torch.cat((torch.from_numpy(start_token).float(), oh_labels), dim=1)
     return oh_labels
 
+def accuracy(outputs, labels):
+    labels_loc, labels_dims, labels_rot, labels_type = labels
+    outputs = outputs.permute(1, 0, 2).cpu().detach().numpy()
+    num_places = labels_loc.shape[0] * labels_loc.shape[1]
+    acc_loc = np.sum((np.argmax(outputs[:, :, :343], axis=2) == labels_loc)) / num_places
+    acc_dim = np.sum((np.argmax(outputs[:, :, 343:855], axis=2) == labels_dims)) / num_places
+    acc_rot = np.sum((np.argmax(outputs[:, :, 855:858], axis=2) == labels_rot)) / num_places
+    acc_type = np.sum((np.argmax(outputs[:, :, 858:], axis=2) == labels_type)) / num_places
+    return (acc_loc, acc_dim, acc_rot, acc_type)
+
 prev_test_loss = 1e20
 prev_test_reward = 0
 test_size = config.test_size
 batch_size = config.batch_size
-for epoch in range(0, config.epochs):
+for epoch in range(0, 10000):
     # gen_objs_iters = {k: (iter(v[0]), iter(v[1])) for k, v in gen_objs.items()}
     start_time = time.time()
     train_loss = 0
-    Accuracies = []
+    accs = 0
     imitate_net.train()
     # Number of times to accumulate gradients
     num_accums = config.num_traj
@@ -165,6 +175,7 @@ for epoch in range(0, config.epochs):
                 #           np.stack([x[1][2] for x in samples]),
                 #           np.stack([x[1][3] for x in samples]))
                 data, labels = next(train_gen_objs[k])
+
                 oh_labels = one_hot_labels(labels).cuda()
 
                 # data = data[:, :, 0:config.top_k + 1, :, :, :]
@@ -173,31 +184,35 @@ for epoch in range(0, config.epochs):
                 # forward pass
                 outputs = imitate_net([data, oh_labels, k])
 
+                accs += sum(accuracy(outputs, labels))/4
                 loss = imitate_net.loss_function(outputs, labels)
                 loss.backward()
                 loss_sum += loss.data
         batch_end = time.time()
-        print(f"batch time: {batch_end - batch_start}")
+        # print(f"batch time: {batch_end - batch_start}")
 
         # Clip the gradient to fixed value to stabilize training.
         torch.nn.utils.clip_grad_norm_(imitate_net.parameters(), 20)
         optimizer.step()
         l = loss_sum
         train_loss += l
-        print('train_loss_batch', l.cpu().numpy(), epoch * (
-            config.train_size //
-            (config.batch_size * num_accums)) + batch_idx)
+        # print('train_loss_batch', l.cpu().numpy(), epoch * (
+        #     config.train_size //
+        #     (config.batch_size * num_accums)) + batch_idx)
     mean_train_loss = train_loss / (config.train_size // (config.batch_size * num_accums)) / types_prog
     print('train_loss', mean_train_loss.cpu().numpy(), epoch)
+    accs = accs / (config.train_size // (config.batch_size * num_accums)) / types_prog
+    print(f'train acc: {accs}')
     del data, loss, loss_sum, train_loss, outputs
 
     end_time = time.time()
-    print(f"TIME: {end_time - start_time}")
+    # print(f"TIME: {end_time - start_time}")
 
     test_losses = 0
     imitate_net.eval()
     test_reward = 0
     num_correct = 0
+    accs = 0
     for batch_idx in range(config.test_size // config.batch_size):
         for k in data_labels_paths.keys():
             with torch.no_grad():
@@ -210,15 +225,14 @@ for epoch in range(0, config.epochs):
                 #           np.stack([x[1][1] for x in samples]),
                 #           np.stack([x[1][2] for x in samples]),
                 #           np.stack([x[1][3] for x in samples]))
-                data_, labels = next(test_gen_objs[k])
+                data_, labels = next(train_gen_objs[k])
                 oh_labels = one_hot_labels(labels).cuda()
 
                 data = Variable(torch.from_numpy(data_)).cuda()
 
-                if cuda_devices > 1:
-                    test_output = imitate_net.module.test([data, oh_labels, k])
-                else:
-                    test_output = imitate_net.test([data, oh_labels, k])
+                test_output = imitate_net.test([data, oh_labels, k])
+
+                accs += sum(accuracy(test_output, labels))/4
 
                 l = imitate_net.loss_function(test_output, [x[:, :-1] for x in labels])
                 test_losses += l
@@ -233,17 +247,18 @@ for epoch in range(0, config.epochs):
                 test_reward += np.sum(R)
 
     test_reward = test_reward / (test_size // batch_size) / ((batch_size // types_prog) * types_prog)
+    accs = accs / (test_size // batch_size) / ((batch_size // types_prog) * types_prog)
 
     test_loss = test_losses.cpu().numpy() / (config.test_size // config.batch_size) / types_prog
     print('test_loss', test_loss, epoch)
-    print('test_IOU', test_reward / (config.test_size // config.batch_size), epoch)
-    print('percent correct programs', num_correct / config.test_size, epoch)
+    print(f"test acc {accs}")
+    print('percent correct programs', num_correct / config.test_size)
     callback.add_value({
         "test_loss": test_loss,
     })
     print ("Average test IOU: {} at {} epoch".format(test_reward, epoch))
-    if config.if_schedule:
-        reduce_plat.reduce_on_plateu(-test_reward)
+    # if config.if_schedule:
+    #     reduce_plat.reduce_on_plateu(-test_reward)
 
     del test_losses, test_output
     if test_reward > prev_test_reward:

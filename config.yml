@@ -16,7 +16,7 @@ pretrain_model_path = "trained_models/models.pth"
 num_epochs = 100
 
 # batch size for training
-batch_size = 600
+batch_size = 100
 
 # hidden size for RNN
 hidden_size = 1500
@@ -25,7 +25,7 @@ hidden_size = 1500
 input_size = 2048
 
 # Number of times gradients need to be accumulated before updating the weights
-num_traj = 5
+num_traj = 1
 
 # Optimizer
 optim = adam

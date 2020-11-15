@@ -185,6 +185,7 @@ class Generator:
                             #  different parser to get the keys to dict
                             program = self.parse(self.programs[program_len][
                                                          value])
+                        # print(program)
                         sim.generate_stack(program, if_primitives=if_primitives)
                         stack = sim.stack_t
                         stack = np.stack(stack, axis=0)[-1, 0, :, :, :]
